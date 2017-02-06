@@ -22,6 +22,7 @@ import logging
 import threading
 import traceback
 import time
+import datetime
 from master_config import get
 
 logger = logging.getLogger(name='database')
@@ -118,12 +119,22 @@ __time_update = 0
 __time_db = 0
 
 def now():
+	"""
+	Return the current database timestamp.
+
+	To minimise the number of accesses to the database (because it can be blocking
+	and it is on a different server), we cache the result for some time and adjust
+	it by local clock. We re-request the database timestamp from time to time, so
+	the database stays the authoritative source of time.
+	"""
 	global __time_update
 	global __time_db
 	t = time.time()
-	if __time_update + 2 < t:
+	diff = t - __time_update
+	if diff > 600: # More than 10 minutes since the last update, request a new one
 		__time_update = t
+		diff = 0 # We request it now, so it is in sync
 		with transaction() as t:
 			t.execute("SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'");
 			(__time_db,) = t.fetchone()
-	return __time_db
+	return __time_db + datetime.timedelta(seconds=diff)
