@@ -23,7 +23,30 @@ import threading
 import traceback
 import time
 import datetime
+import os
+import ctypes
 from master_config import get
+
+# The time.time() isn't exactly suitable for our needs. This is a trick from
+# http://stackoverflow.com/questions/1205722/how-do-i-get-monotonic-time-durations-in-python
+CLOCK_MONOTONIC_RAW = 4
+
+class timespec(ctypes.Structure):
+    _fields_ = [
+        ('tv_sec', ctypes.c_long),
+        ('tv_nsec', ctypes.c_long)
+    ]
+
+librt = ctypes.CDLL('librt.so.1', use_errno=True)
+clock_gettime = librt.clock_gettime
+clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
+
+def monotonic_time():
+    t = timespec()
+    if clock_gettime(CLOCK_MONOTONIC_RAW , ctypes.pointer(t)) != 0:
+        errno_ = ctypes.get_errno()
+        raise OSError(errno_, os.strerror(errno_))
+    return t.tv_sec + t.tv_nsec * 1e-9
 
 logger = logging.getLogger(name='database')
 
@@ -43,7 +66,7 @@ class __CursorContext:
 	def __enter__(self):
 		if not self.__depth:
 			logger.debug('Entering transaction %s', self)
-			self.__start_time = time.time()
+			self.__start_time = monotonic_time()
 		self.__depth += 1
 		return self._cursor
 
@@ -51,7 +74,7 @@ class __CursorContext:
 		self.__depth -= 1
 		if self.__depth:
 			return # Didn't exit all the contexts yet
-		duration = time.time() - self.__start_time
+		duration = monotonic_time() - self.__start_time
 		if duration > 10:
 			logger.warn('The transaction took a long time (%s seconds): %s', duration, traceback.format_stack())
 		self.__start_time = None
@@ -129,7 +152,7 @@ def now():
 	"""
 	global __time_update
 	global __time_db
-	t = time.time()
+	t = monotonic_time()
 	diff = t - __time_update
 	if diff > 600: # More than 10 minutes since the last update, request a new one
 		__time_update = t
